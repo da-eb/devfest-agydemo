@@ -1,6 +1,6 @@
 # The Zero-Failure Migration: lab repo
 
-DevFest Akure 2026 · David Ebube
+DevFest 2026 · David Ebube
 
 This repo is broken on purpose. It's a small FastAPI app carrying the same
 problems I found in a real inherited client repo: a hardcoded API key, database
