@@ -13,7 +13,7 @@ venv/
 
 # AI assistant output
 audit-report.md
-deps-audit.json
+deps-audit.txt
 agy-fixed-workflow.md
 generated-verification.yml
 verification-analysis.md

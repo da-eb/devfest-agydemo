@@ -63,9 +63,14 @@ the missing `/health` route), then run `./audit.sh` again until it passes.
 Useful flags:
 
 - `./audit.sh --save` writes the report to `audit-report.md`
-- `./audit.sh --deps` adds an optional second step: `pip-audit` (or `npm audit`
-  in a Node repo) checks dependencies against published advisories, then agy
-  says which advisories the app actually reaches
+- `./audit.sh --deps` adds an optional second step. It looks at the repo to see
+  which stacks it uses, runs the matching advisory scanner for each (`npm`,
+  `pnpm` or `yarn audit` for JavaScript, `pip-audit` for Python,
+  `govulncheck` for Go, `cargo audit` for Rust, `bundle-audit` for Ruby,
+  `composer audit` for PHP, `dotnet list package --vulnerable` for .NET, and
+  `osv-scanner` for Maven, Gradle, Poetry and the rest), then agy says which
+  advisories the app actually reaches. A scanner that isn't installed is listed
+  as NOT SCANNED, never silently skipped. This step never blocks a push.
 
 ## Part 3: make the rules yours and gate your pushes
 
@@ -78,9 +83,10 @@ Useful flags:
    ./scripts/setup-hooks.sh
    ```
 
-   From now on `git push` runs the audit first. Any critical finding cancels
-   the push; a clean audit lets it through. `--deps` never runs in the hook, so
-   a push can't hang waiting on the network.
+   From now on `git push` audits the commits you are pushing. Any critical
+   finding cancels the push; a clean audit lets it through. The audit reads the
+   commit, not your working tree, so commit your fix before you push again.
+   `--deps` never runs in the hook, so a push can't hang waiting on the network.
 4. Copy `AGENTS.md` and `audit.sh` into one of your own repos.
 
 ## If something goes wrong
@@ -92,6 +98,10 @@ Useful flags:
 | `headless mode cannot prompt for ... auto-denied` | agy tried to run a shell command. `audit.sh` already gives it the files, so re-run it. Don't add `--dangerously-skip-permissions`: that lets the model run any command on your machine |
 | `Could not find the SUMMARY line` | The model didn't follow the report format. Re-run; if it keeps happening, check the output format in `AGENTS.md` |
 | You need to push anyway | `git push --no-verify` skips the hook. Use it knowing what you're skipping |
+
+The hook is a guardrail, not a lock. It lives on your machine, git doesn't copy
+it when someone clones the repo, and `--no-verify` skips it. To make the audit
+binding for a team, the same check has to run server-side too.
 
 An AI audit is a second pair of eyes, not a guarantee. It reads the code as it
 is now. A secret that was ever committed is still in git history, so rotate it

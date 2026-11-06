@@ -1,28 +1,74 @@
 #!/usr/bin/env bash
 # ══════════════════════════════════════════════════════════════════════════════
-# Git pre-push hook — runs the agy audit before every push
+# Git pre-push hook: audits the commits you are about to push
 # ══════════════════════════════════════════════════════════════════════════════
-# Flow:
-#   git push → this hook → ./audit.sh --pre-push → agy audits the repo
-#     any critical finding  → exit 1 → git cancels the push → fix, push again
-#     no critical findings  → exit 0 → the push goes through
+# Git calls this hook with the remote's name and URL, and writes one line per
+# ref being pushed to its stdin:
 #
-# The dependency check (--deps) is never run here, so the hook can't hang.
+#   <local ref> <local sha> <remote ref> <remote sha>
+#
+# For each ref, the hook unpacks that exact commit into a temp folder and runs
+# ./audit.sh on it. It audits what you are pushing, not what is on your disk, so
+# a fix you have not committed cannot clear a push that does not contain it.
+#
+#   any critical finding, or the audit can't run  -> exit 1 -> git cancels the push
+#   no critical findings                          -> exit 0 -> the push goes through
+#   deleting a remote branch or tag               -> nothing to audit, allowed
+#
+# The dependency check (--deps) never runs here, so a push can't hang on it.
+# This is a local guardrail, not a lock: `git push --no-verify` skips it.
 #
 # Install:  ./scripts/setup-hooks.sh
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Git runs hooks from the repo root, but be explicit.
-cd "$(git rev-parse --show-toplevel)" || exit 1
+ROOT=$(git rev-parse --show-toplevel) || exit 1
 
-echo ""
-echo "Running agy audit before push..."
-echo ""
+# Collect what is being pushed first. The audit must not read this stdin.
+SHAS=""
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$local_sha" in
+    ''|*[!0]*) ;;      # has a non-zero digit: a real commit
+    *) continue ;;     # all zeros: deleting a remote ref, nothing to audit
+  esac
+  case " $SHAS " in
+    *" $local_sha "*) ;;                 # already queued (several refs, one commit)
+    *) SHAS="$SHAS $local_sha" ;;
+  esac
+done
 
-if ! ./audit.sh --pre-push; then
+[ -z "$SHAS" ] && exit 0
+
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/prepush-audit.XXXXXX") || exit 1
+trap 'rm -rf "$WORK"' EXIT
+
+for sha in $SHAS; do
+  short=$(git rev-parse --short "$sha" 2>/dev/null || echo "$sha")
   echo ""
-  echo "Push aborted. Fix the critical findings above, then push again."
-  exit 1
-fi
+  echo "Auditing the commit you are pushing ($short) before it leaves your machine..."
+
+  rm -rf "$WORK/tree" && mkdir "$WORK/tree"
+  if ! git archive "$sha" | tar -x -C "$WORK/tree"; then
+    echo "Could not unpack $short, so it can't be audited. Push aborted."
+    exit 1
+  fi
+
+  # Run audit.sh from the unpacked commit. Drop git's hook environment so the
+  # audit sees only that folder, and stop git searching upward for a repo.
+  (
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+    export GIT_CEILING_DIRECTORIES="$WORK"
+    cd "$WORK/tree" && "$ROOT/audit.sh" --pre-push
+  ) < /dev/null
+  status=$?
+
+  # Keep the report where you can read it (it is git-ignored).
+  [ -f "$WORK/tree/audit-report.md" ] && cp "$WORK/tree/audit-report.md" "$ROOT/audit-report.md"
+
+  if [ $status -ne 0 ]; then
+    echo ""
+    echo "Push aborted. Commit your fix, then push again: the audit reads the commit, not your working tree."
+    exit 1
+  fi
+done
 
 exit 0

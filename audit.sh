@@ -149,41 +149,41 @@ echo ""
 # Opt-in only. The pre-push hook never runs this, so a push can't hang on it.
 if [ "$RUN_DEPS" = true ]; then
   echo -e "${DIM}Step 2: dependency advisories${NC}"
-  DEPS_FILE="deps-audit.json"
+  echo "Scanners picked from the stack this repo uses:"
+  DEPS_FILE="deps-audit.txt"
 
-  if [ -f package.json ]; then
-    npm audit --json > "$DEPS_FILE" 2>/dev/null || true
-  elif [ -f app/requirements.txt ]; then
-    if ! command -v pip-audit &> /dev/null; then
-      echo "pip-audit not found. Install it: pip install pip-audit"
-      exit 0
-    fi
-    pip-audit -r app/requirements.txt -f json > "$DEPS_FILE" 2>/dev/null || true
-  else
-    echo "No package.json or app/requirements.txt found. Skipping."
+  if ! bash "$(dirname "$0")/scripts/dep-advisories.sh" "$DEPS_FILE"; then
+    echo -e "${YELLOW}Nothing was scanned (no manifest, missing scanner, or no network). Skipping.${NC}"
     exit 0
   fi
 
-  if [ ! -s "$DEPS_FILE" ]; then
-    echo -e "${YELLOW}The advisory scan returned nothing (no network?). Skipping.${NC}"
-    exit 0
-  fi
-
+  echo ""
   echo -e "${BLUE}→ Advisories saved to $DEPS_FILE. Asking agy which ones the app reaches...${NC}"
   echo ""
   DEPS_PROMPT="Below is a dependency advisory scan and the app source. Do not call any tools.
 For each advisory, say whether this app actually calls the vulnerable code: REACHABLE or
 NOT REACHABLE, with the file and line that proves it. Then say which to upgrade first.
+Lines that start with # name ecosystems that were NOT scanned. List them at the end as
+'No advisory coverage', so nobody reads them as clean.
 
 === $DEPS_FILE ===
 $(cat "$DEPS_FILE")
 "
-  for f in app/*.py app/*.js app/*.ts; do
-    [ -f "$f" ] && DEPS_PROMPT+="
+  # Source files for the reachability check: any language, capped so the prompt stays small.
+  SRC_BYTES=0
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    SZ=$(wc -c < "$f")
+    [ "$SZ" -gt 100000 ] && continue
+    [ $((SRC_BYTES + SZ)) -gt 250000 ] && break
+    SRC_BYTES=$((SRC_BYTES + SZ))
+    DEPS_PROMPT+="
 === FILE: $f ===
 $(cat -n "$f")
 "
-  done
+  done < <( { git ls-files 2>/dev/null || find . -type f -not -path './.git/*' | sed 's|^\./||'; } \
+    | grep -E '\.(py|js|jsx|mjs|ts|tsx|go|rs|rb|php|java|kt|cs)$' \
+    | grep -vE '(^|/)(node_modules|vendor|dist|build|target)/' )
   agy -p "$DEPS_PROMPT" || true
   echo ""
   echo -e "${DIM}Step 2 is advisory only. It does not block the push.${NC}"
